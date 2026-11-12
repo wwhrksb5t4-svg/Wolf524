@@ -31,6 +31,11 @@ BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 BASE58_MAP = {char: index for index, char in enumerate(BASE58_ALPHABET)}
 
 
+def phantom_token_url(mint: str) -> str:
+    """Create a Phantom deep-link to open the token in the wallet/browser flow."""
+    return f"https://phantom.app/ul/browse/https%3A%2F%2Fdexscreener.com%2Fsolana%2F{mint}"
+
+
 @dataclass
 class TokenReport:
     mint: str
@@ -326,7 +331,7 @@ def report_text(report: TokenReport) -> str:
     market_buyers = report.buys_24h if report.buys_24h is not None else "غير متاح"
     market_sellers = report.sells_24h if report.sells_24h is not None else "غير متاح"
     concentration = f"{report.top10_percent:.1f}%" if report.top10_percent is not None else "غير متاح"
-    authority_mint = "فع��الة ⚠️" if report.mint_authority is True else "غير فعّالة ✅" if report.mint_authority is False else "غير معروف"
+    authority_mint = "فعّالة ⚠️" if report.mint_authority is True else "غير فعّالة ✅" if report.mint_authority is False else "غير معروف"
     authority_freeze = "فعّالة ⚠️" if report.freeze_authority is True else "غير فعّالة ✅" if report.freeze_authority is False else "غير معروف"
     if report.risk_score >= 70:
         level = "مرتفع جدًا 🔴"
@@ -340,10 +345,11 @@ def report_text(report: TokenReport) -> str:
     flags = "\n".join(f"• {flag}" for flag in report.risk_flags) or "• لم تظهر مؤشرات ضمن الفحوصات المتاحة."
     holders = "\n".join(f"• `{short_address(address)}` — {amount:,.4g}" for address, amount in report.largest_accounts[:5])
     holders = holders or "غير متاح"
+    phantom_link = phantom_token_url(report.mint)
     links = (
         f"[DexScreener](https://dexscreener.com/solana/{report.mint}) · "
         f"[Solscan](https://solscan.io/token/{report.mint}) · "
-        f"[فتح في Phantom](https://phantom.app/ul/browse/https%3A%2F%2Fdexscreener.com%2Fsolana%2F{report.mint})"
+        f"[Phantom]({phantom_link})"
     )
     return (
         f"🔎 *{_escape_md(report.name)} ({_escape_md(report.symbol)})*\n"
@@ -379,7 +385,6 @@ async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
             report = await scan_token(mint, client)
         previous = get_previous_snapshot(mint, report.scanned_at.isoformat())
-        # Previous snapshot is queried after insertion; the query excludes the current timestamp.
         await update.message.reply_text(report_text(report), parse_mode="Markdown", disable_web_page_preview=True)
     except Exception as exc:
         logger.exception("Scan failed for %s", mint)
@@ -487,7 +492,6 @@ async def monitor_watched(context: ContextTypes.DEFAULT_TYPE) -> None:
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         for mint, user_ids in watched.items():
             try:
-                # Compare with last saved scan before this scan; scan_token persists the new snapshot.
                 old = get_previous_snapshot(mint, datetime.now(timezone.utc).isoformat())
                 report = await scan_token(mint, client)
                 if old and old[0] and report.liquidity_usd is not None and old[0] > 0:
@@ -499,7 +503,8 @@ async def monitor_watched(context: ContextTypes.DEFAULT_TYPE) -> None:
                             f"انخفضت السيولة {decline * 100:.1f}% منذ آخر فحص "
                             f"({usd(old[0])} ← {usd(report.liquidity_usd)}).\n\n"
                             f"[DexScreener](https://dexscreener.com/solana/{mint}) · "
-                            f"[Solscan](https://solscan.io/token/{mint})"
+                            f"[Solscan](https://solscan.io/token/{mint}) · "
+                            f"[Phantom]({phantom_token_url(mint)})"
                         )
                         for user_id in user_ids:
                             try:
