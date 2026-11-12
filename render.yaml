@@ -1,0 +1,21 @@
+services:
+  - type: worker
+    name: wolf524-telegram-bot
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: SOLANA_RPC_URL
+        value: https://api.mainnet-beta.solana.com
+      - key: DATABASE_PATH
+        value: /var/data/wolf524.db
+      - key: SCAN_INTERVAL_SECONDS
+        value: "300"
+    disk:
+      name: wolf524-data
+      mountPath: /var/data
+      sizeGB: 1
