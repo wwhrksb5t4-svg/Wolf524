@@ -1,43 +1,34 @@
-# Wolf524 — بوت اكتشاف وتحليل توكنات Solana
+import importlib
 
-يبحث البوت تلقائيًا عن توكنات جديدة من عدة مصادر عامة، يجمع مؤشرات السوق والسلسلة، ثم يرسل قائمة بحث مرتبة مع تفسير الدرجة. لا تحتاج إدخال عنوان العقد للبحث.
+import bot
 
-## الأدوات والتحليلات
 
-- **DexScreener:** ملفات التوكنات الحديثة، boosts، السعر والسيولة والحجم وعدد المعاملات وتغير السعر.
-- **GeckoTerminal:** مجمعات السيولة الحديثة على Solana.
-- **Solana RPC:** صلاحيات Mint/Freeze وأكبر حسابات التوكن.
-- **RugCheck:** إثراء إضافي بالمخاطر عند توفر الخدمة. عدم توفر التقرير لا يعني أن التوكن آمن.
-- **Birdeye (اختياري):** قوائم التوكنات الجديدة؛ أضف `BIRDEYE_API_KEY` من حساب المزود إذا كان متاحًا ضمن خطتك.
-- **تحليل محلي قابل للتفسير:** السيولة، نسبة الحجم للسيولة، عدد المعاملات، التوازن التقريبي بين معاملات الشراء والبيع، حداثة الزوج، تركّز أكبر 10 حسابات، الصلاحيات، تغير السعر، ومقارنة السيولة بلقطات البوت السابقة.
-- روابط DexScreener وSolscan وPhantom، وروابط المشروع العامة عند توفرها.
+def test_validate_mint_and_alert_dedupe(monkeypatch, tmp_path):
+    db_path = tmp_path / "wolf524.db"
+    monkeypatch.setattr(bot, "DATABASE_PATH", str(db_path))
+    bot.init_db()
 
-هذه الأدوات لا تعني أن هناك قاعدة بيانات كاملة أو أن البوت يستطيع أن يسبق جميع المشترين. خدمات الفهرسة قد تتأخر أو تفوّت توكنات.
+    mint = "So11111111111111111111111111111111111111112"
+    assert bot.validate_mint(mint) is True
+    assert bot.validate_mint("bad-mint") is False
 
-## أوامر Telegram
+    assert bot.should_send_alert(100, mint, "price_drop") is True
+    bot.mark_alert_sent(100, mint, "price_drop")
+    assert bot.should_send_alert(100, mint, "price_drop") is False
 
-- `/discover` — بحث وفحص الآن.
-- `/autodiscover on` — تشغيل تنبيهات دورية.
-- `/autodiscover off` — إيقاف التنبيهات.
-- `/scan <mint>` — فحص عقد محدد.
-- `/watch <mint>` و`/unwatch <mint>` — إدارة قائمة المراقبة.
-- `/watchlist` و`/top` — عرض وترتيب قائمة المراقبة.
+    bot.set_user_setting(100, "min_liquidity_usd", 15000)
+    assert bot.get_user_setting(100, "min_liquidity_usd", 0) == 15000
 
-## إعداد Railway
 
-اربط مستودع `wwhrksb5t4-svg/Wolf524` بخدمة Docker. في **Service → Variables** أضف `BOT_TOKEN` (توكن @BotFather) ثم طبّق التغييرات وأعد النشر. لدوام قاعدة البيانات أضف Volume بمسار `/data` وأضف `DATABASE_PATH=/data/wolf524.db`.
+def test_threshold_aliases_and_defaults(monkeypatch, tmp_path):
+    db_path = tmp_path / "wolf524.db"
+    monkeypatch.setattr(bot, "DATABASE_PATH", str(db_path))
+    bot.init_db()
 
-Birdeye اختياري: أضف `BIRDEYE_API_KEY` كـ Secret في Railway وأعد النشر. لا تضع التوكنات أو مفاتيح API في GitHub أو المحادثات.
+    thresholds = bot.get_alert_thresholds(42)
+    assert thresholds["min_liquidity_usd"] == bot.DEFAULT_ALERT_SETTINGS["min_liquidity_usd"]
+    assert thresholds["liquidity_drop_pct"] == bot.DEFAULT_ALERT_SETTINGS["liquidity_drop_pct"]
 
-بعد أن تصبح الخدمة Running، أرسل للبوت `/start` ثم `/autodiscover on`.
-
-## حدود التقييم والسلامة
-
-درجة النشاط البحثية مقياس heuristic للترتيب وليست احتمال نجاح أو توقع عائد. درجة المخاطر المحلية وRugCheck معروضان كلٌ على حدة لاختلاف مقاييسهما. عدد الشراء/البيع عدد معاملات وليس عدد محافظ فريدة؛ أكبر الحسابات لا تثبت ملكية محافظ مستقلة؛ عمر زوج التداول ليس عمر إنشاء التوكن؛ والروابط الاجتماعية لا تثبت نشاط المجتمع أو شرعيته. لا يوجد فحص يضمن اكتشاف rug pull أو قابلية البيع. هذه أداة معلومات وليست توصية استثمارية؛ قد تخسر كامل المبلغ. لا تشارك seed phrase أو مفاتيح المحفظة.
-
-## مصادر API
-
-- DexScreener: https://docs.dexscreener.com/api/reference
-- GeckoTerminal: https://api.geckoterminal.com/docs/
-- RugCheck: https://api.rugcheck.xyz/swagger/index.html
-- Birdeye: https://docs.birdeye.so/
+    bot.set_user_setting(42, "liquidity_drop_pct", 25)
+    thresholds = bot.get_alert_thresholds(42)
+    assert thresholds["liquidity_drop_pct"] == 25
