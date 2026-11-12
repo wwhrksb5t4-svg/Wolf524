@@ -6,6 +6,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
-COPY bot.py runner.py ./
+COPY bot.py runner.py app.py ./
 
-CMD ["python", "runner.py"]
+CMD ["python", "app.py"]
