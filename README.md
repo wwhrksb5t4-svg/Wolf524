@@ -1,34 +1,44 @@
-import importlib
+# Wolf524 — بوت اكتشاف وتحليل توكنات Solana
 
-import bot
+يبحث البوت تلقائيًا عن توكنات جديدة من عدة مصادر عامة، يجمع مؤشرات السوق والسلسلة، ثم يرسل قائمة بحث مرتبة مع مؤشرات المخاطر.
 
+## الأدوات والتحليلات
 
-def test_validate_mint_and_alert_dedupe(monkeypatch, tmp_path):
-    db_path = tmp_path / "wolf524.db"
-    monkeypatch.setattr(bot, "DATABASE_PATH", str(db_path))
-    bot.init_db()
+- DexScreener: ملفات التوكنات الحديثة، boosts، السعر والسيولة والحجم وعدد المعاملات وتغير السعر.
+- GeckoTerminal: مجمعات السيولة الحديثة على Solana.
+- Solana RPC: صلاحيات Mint/Freeze وأكبر حسابات التوكن.
+- RugCheck: إثراء إضافي بالمخاطر عند توفر الخدمة.
+- Birdeye (اختياري): قوائم التوكنات الجديدة عند توفر مفتاح API.
+- تحليل محلي قابل للتفسير: السيولة، نسبة الحجم للسيولة، عدد المعاملات، التوزيع، ومؤشرات المخاطر.
 
-    mint = "So11111111111111111111111111111111111111112"
-    assert bot.validate_mint(mint) is True
-    assert bot.validate_mint("bad-mint") is False
+## أوامر Telegram
 
-    assert bot.should_send_alert(100, mint, "price_drop") is True
-    bot.mark_alert_sent(100, mint, "price_drop")
-    assert bot.should_send_alert(100, mint, "price_drop") is False
+- /discover — بحث وفحص الآن.
+- /autodiscover on — تشغيل تنبيهات دورية.
+- /autodiscover off — إيقاف التنبيهات.
+- /scan <mint> — فحص عقد محدد.
+- /watch <mint> و /unwatch <mint> — إدارة قائمة المراقبة.
+- /watchlist و /top — عرض وترتيب قائمة المراقبة.
+- /settings — عرض حدود التنبيهات الحالية.
+- /setalert <key> <value> — ضبط عتبات التنبيهات مثل liquidity، price، minliq، minvol، risk.
 
-    bot.set_user_setting(100, "min_liquidity_usd", 15000)
-    assert bot.get_user_setting(100, "min_liquidity_usd", 0) == 15000
+## إعداد Railway
 
+اربط مستودع `wwhrksb5t4-svg/Wolf524` بخدمة Docker. في Service → Variables أضف `BOT_TOKEN` (توكن @BotFather) ثم طبّق التغييرات وأعد النشر. لـ Birdeye اختياري أضف `BIRDEYE_API_KEY` كـ Secret.
 
-def test_threshold_aliases_and_defaults(monkeypatch, tmp_path):
-    db_path = tmp_path / "wolf524.db"
-    monkeypatch.setattr(bot, "DATABASE_PATH", str(db_path))
-    bot.init_db()
+## إحصائيات التنبيه
 
-    thresholds = bot.get_alert_thresholds(42)
-    assert thresholds["min_liquidity_usd"] == bot.DEFAULT_ALERT_SETTINGS["min_liquidity_usd"]
-    assert thresholds["liquidity_drop_pct"] == bot.DEFAULT_ALERT_SETTINGS["liquidity_drop_pct"]
+- لا يتم إرسال نفس تنبيه لنفس المستخدم/العملة/نوع التنبيه إلا كل 6 ساعات.
+- يدعم التنبيهات عند انحدار السيولة والسعر مع إعدادات قابلة للتعديل لكل مستخدم.
+- هذا النظام يهدف إلى تقليل الضجيج دون إلغاء التنبيهات المهمة.
 
-    bot.set_user_setting(42, "liquidity_drop_pct", 25)
-    thresholds = bot.get_alert_thresholds(42)
-    assert thresholds["liquidity_drop_pct"] == 25
+## حدود التقييم والسلامة
+
+درجة النشاط البحثية مقياس heuristic للترتيب وليست احتمال نجاح أو توقع عائد. درجة المخاطر المحلية وRugCheck معروضة فقط كأدوات مساعدة وليست ضمانًا ضد الاحتيال.
+
+## مصادر API
+
+- DexScreener: https://docs.dexscreener.com/api/reference
+- GeckoTerminal: https://api.geckoterminal.com/docs/
+- RugCheck: https://api.rugcheck.xyz/swagger/index.html
+- Birdeye: https://docs.birdeye.so/
