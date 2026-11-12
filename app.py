@@ -12,13 +12,12 @@ import bot as core
 import runner as discovery
 
 logger = logging.getLogger("wolf524")
+
 try:
     SPAM_FILTER_THRESHOLD = max(1, min(100, int(os.getenv("SPAM_FILTER_THRESHOLD", "50"))))
 except ValueError:
     SPAM_FILTER_THRESHOLD = 50
 
-# Heuristic warning markers, not proof of fraud. Generic terms such as "meme"
-# and "launch" are intentionally excluded to reduce false positives.
 _SPAM_KEYWORDS = (
     "airdrop", "claim now", "free giveaway", "guaranteed profit", "guaranteed returns",
     "send sol", "double your", "100x guaranteed", "1000x guaranteed", "buy now",
@@ -29,24 +28,37 @@ _SUSPICIOUS_TERMS = re.compile(
     re.IGNORECASE,
 )
 _REPEAT_PATTERN = re.compile(r"(.)\1{4,}")
+
 BUY_TIPS = (
     "🛡️ قائمة تحقق بحثية عامة — ليست توصية شراء أو بيع:\n"
     "• تحقق من عنوان Mint عبر أكثر من مصدر موثوق، ولا تعتمد على الاسم أو الرمز فقط.\n"
     "• راجع السيولة وإمكانية السحب والانزلاق، وابحث عن معلومات القفل من مصدر مستقل.\n"
     "• افحص صلاحيات Mint/Freeze وتركيز الحيازة ومخاطر RugCheck؛ غياب البيانات لا يعني أن التوكن آمن.\n"
     "• لا تطارد الارتفاعات الحادة، واحذر العبارات الترويجية والوعود بالعائد المضمون.\n"
-    "• لا تستخدم أموالًا تحتاجها أو اقتراضًا/رافعة، وحدّد مسبقًا مقدار الخسارة الممكنة.\n"
+    "• لا تستخدم أموالًا تحتاجها أو أقساطًا/رافعة، وحدّد مسبقًا مقدار الخسارة الممكنة.\n"
     "• الفلاتر والدرجات آلية وتقريبية وقد تفوّت مخاطر؛ اتخذ قرارك بعد بحث مستقل."
 )
 
 
+def spam_status(score: int) -> str:
+    if score >= 80:
+        return "خطير جدًا ⚠️"
+    if score >= 60:
+        return "مثير للقلق ⚠️"
+    if score >= 40:
+        return "مشكوك فيه ⚠️"
+    return "مقبول نسبيًا ✅"
+
+
 def init_preferences_db() -> None:
-    """Create preferences table and migrate installations made by earlier versions."""
+    """Create and migrate the spam-filter preferences table."""
     with sqlite3.connect(core.DATABASE_PATH) as db:
-        db.execute("""CREATE TABLE IF NOT EXISTS spam_filter_preferences (
-            user_id INTEGER PRIMARY KEY,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            threshold INTEGER NOT NULL DEFAULT 50)""")
+        db.execute(
+            """CREATE TABLE IF NOT EXISTS spam_filter_preferences (
+                user_id INTEGER PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                threshold INTEGER NOT NULL DEFAULT 50)"""
+        )
         columns = {row[1] for row in db.execute("PRAGMA table_info(spam_filter_preferences)")}
         if "enabled" not in columns:
             db.execute("ALTER TABLE spam_filter_preferences ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1")
@@ -80,20 +92,20 @@ def set_spam_filter(user_id: int, enabled: bool) -> None:
         db.execute(
             "INSERT INTO spam_filter_preferences (user_id, enabled, threshold) VALUES (?, ?, ?) "
             "ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled",
-            (user_id, int(enabled), SPAM_FILTER_THRESHOLD),
+            (user_id, int(enabled), get_spam_threshold(user_id)),
         )
         db.commit()
 
 
 def set_spam_threshold(user_id: int, threshold: int) -> int:
-    if not 1 <= int(threshold) <= 100:
-        raise ValueError("threshold must be between 1 and 100")
     value = int(threshold)
+    if not 1 <= value <= 100:
+        raise ValueError("threshold must be between 1 and 100")
     with sqlite3.connect(core.DATABASE_PATH) as db:
         db.execute(
-            "INSERT INTO spam_filter_preferences (user_id, enabled, threshold) VALUES (?, 1, ?) "
+            "INSERT INTO spam_filter_preferences (user_id, enabled, threshold) VALUES (?, ?, ?) "
             "ON CONFLICT(user_id) DO UPDATE SET threshold=excluded.threshold",
-            (user_id, value),
+            (user_id, int(spam_filter_enabled(user_id)), value),
         )
         db.commit()
     return value
@@ -122,6 +134,7 @@ def spam_signals(report: Any) -> tuple[int, list[str]]:
         volume = float(getattr(report, "volume_24h", None) or 0)
     except (TypeError, ValueError):
         liquidity, volume = 0.0, 0.0
+
     if liquidity > 0:
         ratio = volume / liquidity
         if ratio >= 20:
@@ -160,12 +173,13 @@ def spam_signals(report: Any) -> tuple[int, list[str]]:
 
 
 def install_spam_scoring() -> None:
-    """Attach spam score to each scanned candidate without changing base qualification."""
+    """Attach a spam score and a user-readable status to each discovery candidate."""
     original_qualifies = discovery.qualifies
     original_format = discovery.format_candidate
 
     def score_candidate(report: Any, rug: dict[str, Any] | None) -> bool:
         report.spam_score, report.spam_signals = spam_signals(report)
+        report.spam_status = spam_status(report.spam_score)
         return original_qualifies(report, rug)
 
     def format_candidate(report: Any) -> str:
@@ -175,20 +189,21 @@ def install_spam_scoring() -> None:
         if score is None:
             score, signals = spam_signals(report)
         details = "؛ ".join(signals[:3]) if signals else "لم تظهر إشارات Spam قوية ضمن البيانات المتاحة"
-        return f"🧹 مؤشر Spam heuristic: {score}/100\n{details}\n\n{message}"
+        return f"🧹 مؤشر Spam heuristic: {score}/100 — {spam_status(score)}\n{details}\n\n{message}"
 
     discovery.qualifies = score_candidate
     discovery.format_candidate = format_candidate
 
 
 def with_buy_tips(message: str) -> str:
-    # Keep Telegram's maximum message size in mind when candidate details are long.
-    return f"{message[:3000]}\n\n{BUY_TIPS}"
+    trimmed = message if len(message) <= 3000 else message[:3000]
+    return f"{trimmed}\n\n{BUY_TIPS}"
 
 
 async def spamfilter_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_user or not update.message:
         return
+
     user_id = update.effective_user.id
     option = context.args[0].lower() if context.args else "status"
     if option == "status":
@@ -197,24 +212,29 @@ async def spamfilter_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(
             f"فلتر Spam الشخصي {'مفعّل ✅' if enabled else 'متوقف ⏸️'}؛ عتبة الاستبعاد {threshold}/100."
         )
-    elif option in {"on", "off"}:
+        return
+
+    if option in {"on", "off"}:
         enabled = option == "on"
         set_spam_filter(user_id, enabled)
         await update.message.reply_text(
             "تم تفعيل فلتر Spam الشخصي ✅" if enabled else "تم إيقاف فلتر Spam الشخصي ⏸️"
         )
-    elif option == "threshold":
+        return
+
+    if option == "threshold":
         if len(context.args) < 2:
             await update.message.reply_text("الاستخدام: /spamfilter threshold <1-100>")
             return
         try:
             threshold = set_spam_threshold(user_id, int(context.args[1]))
-        except (ValueError, TypeError):
+        except (TypeError, ValueError):
             await update.message.reply_text("العتبة يجب أن تكون رقمًا صحيحًا من 1 إلى 100.")
             return
         await update.message.reply_text(f"تم تحديث عتبة فلتر Spam إلى {threshold}/100.")
-    else:
-        await update.message.reply_text("الاستخدام: /spamfilter on | off | status | threshold <1-100>")
+        return
+
+    await update.message.reply_text("الاستخدام: /spamfilter on | off | status | threshold <1-100>")
 
 
 async def buytips_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -222,9 +242,34 @@ async def buytips_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text(BUY_TIPS, disable_web_page_preview=True)
 
 
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message:
+        text = (
+            "الأوامر:\n"
+            "/scan <Mint> — فحص توكن Solana\n"
+            "/watch <Mint> — إضافة للـ watchlist\n"
+            "/unwatch <Mint> — إزالة من الـ watchlist\n"
+            "/watchlist — عرض قائمة المراقبة\n"
+            "/top — ترتيب العملات حسب المخاطر\n"
+            "/discover — البحث عن مرشحين جدد\n"
+            "/autodiscover on|off — تنبيهات البحث\n"
+            "/spamfilter on|off|status|threshold <1-100> — فلتر Spam\n"
+            "/buytips — نصائح شراء/تحقق عامة\n\n"
+            "ملاحظة: الفلتر heuristic فقط، وليس تأكيدًا على الاحتيال." 
+        )
+        await update.message.reply_text(text, disable_web_page_preview=True)
+
+
+async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await core.scan_command(update, context)
+    if update.message:
+        await update.message.reply_text(BUY_TIPS, disable_web_page_preview=True)
+
+
 async def discover_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_user or not update.message:
         return
+
     user_id = update.effective_user.id
     enabled = spam_filter_enabled(user_id)
     threshold = get_spam_threshold(user_id)
@@ -244,11 +289,13 @@ async def discover_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 discarded += 1
                 continue
             filtered_reports.append(report)
+
         if not filtered_reports:
             await update.message.reply_text(
                 f"لم يظهر مرشح بعد الفلاتر (فُحص {examined}؛ استُبعد {discarded} بسبب Spam). جرّب لاحقًا."
             )
             return
+
         for report in sorted(filtered_reports, key=discovery.rank_key)[:5]:
             await update.message.reply_text(
                 with_buy_tips(discovery.format_candidate(report)), disable_web_page_preview=True
@@ -323,9 +370,9 @@ def main() -> None:
 
     handlers = [
         ("start", core.start_command),
-        ("help", core.help_command),
+        ("help", help_command),
         ("status", core.status_command),
-        ("scan", core.scan_command),
+        ("scan", scan_command),
         ("watch", core.watch_command),
         ("unwatch", core.unwatch_command),
         ("watchlist", core.watchlist_command),
@@ -361,3 +408,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
